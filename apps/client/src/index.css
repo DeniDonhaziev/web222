@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+  body {
+    @apply font-sans text-ink-900 bg-[#f4f4f7];
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-white border border-black/5 shadow-glass rounded-xl3;
+  }
+  .glass-card {
+    @apply bg-white border border-black/5 shadow-soft rounded-xl2;
+  }
+}

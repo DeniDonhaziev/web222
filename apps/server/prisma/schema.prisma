@@ -1,0 +1,275 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Пользователи и роли ---------------------------------------------------
+
+enum UserRole {
+  customer
+  executor
+  admin
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  fullName     String
+  avatarUrl    String?
+  role         UserRole
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  executorProfile ExecutorProfile?
+  ordersAsCustomer Order[]        @relation("CustomerOrders")
+  ratingsGiven     Rating[]       @relation("RatingsGiven")
+  notifications    Notification[]
+  complaints       Complaint[]
+}
+
+enum ExecutorType {
+  individual
+  sole_proprietor
+  legal_entity
+}
+
+enum VerificationStatus {
+  pending
+  approved
+  rejected
+}
+
+model ExecutorProfile {
+  id                 String             @id @default(cuid())
+  userId             String             @unique
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  executorType       ExecutorType
+  companyName        String?
+  inn                String?
+  documents          Json?              // ссылки на загруженные документы для верификации
+  verificationStatus VerificationStatus @default(pending)
+  isAvailable        Boolean            @default(true)
+  baseLat            Float?             // база вылета — используется для подбора ближайшего исполнителя
+  baseLng            Float?
+  rating             Float              @default(0)
+  ratingCount        Int                @default(0)
+  balance            Decimal            @default(0) @db.Decimal(12, 2)
+  createdAt          DateTime           @default(now())
+
+  drones Drone[]
+  orders Order[]  @relation("ExecutorOrders")
+  payouts Payout[]
+}
+
+// --- Дроны -------------------------------------------------------------
+
+enum DroneStatus {
+  idle
+  busy
+  maintenance
+}
+
+model Drone {
+  id                String          @id @default(cuid())
+  executorId        String
+  executor          ExecutorProfile @relation(fields: [executorId], references: [id], onDelete: Cascade)
+  name              String
+  payloadCapacityKg Float
+  maxRangeKm        Float
+  speedKmh          Float
+  maxFlightTimeMin  Int
+  status            DroneStatus     @default(idle)
+  createdAt         DateTime        @default(now())
+
+  orders Order[]
+}
+
+// --- Заказы --------------------------------------------------------------
+
+enum OrderStatus {
+  created
+  awaiting_executor
+  executor_found
+  accepted
+  preparing
+  departed
+  in_transit
+  arriving
+  delivered
+  completed
+  cancelled
+}
+
+enum Urgency {
+  standard
+  express
+  urgent
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+model Order {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    User     @relation("CustomerOrders", fields: [customerId], references: [id])
+
+  executorId  String?
+  executor    ExecutorProfile? @relation("ExecutorOrders", fields: [executorId], references: [id])
+  droneId     String?
+  drone       Drone?   @relation(fields: [droneId], references: [id])
+
+  pickupAddress  String
+  pickupLat      Float
+  pickupLng      Float
+  dropoffAddress String
+  dropoffLat     Float
+  dropoffLng     Float
+
+  weightKg    Float
+  lengthCm    Float?
+  widthCm     Float?
+  heightCm    Float?
+  description String?
+  urgency     Urgency @default(standard)
+
+  distanceKm       Float
+  totalPrice       Decimal @db.Decimal(12, 2)
+  commissionAmount Decimal @db.Decimal(12, 2)
+  executorPayout   Decimal @db.Decimal(12, 2)
+
+  status        OrderStatus   @default(created)
+  paymentStatus PaymentStatus @default(pending)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+  cancelledAt DateTime?
+  cancelReason String?
+
+  statusHistory OrderStatusHistory[]
+  trackingPoints TrackingPoint[]
+  payments      Payment[]
+  payout        Payout?
+  rating        Rating?
+  complaints    Complaint[]
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  note      String?
+  changedAt DateTime    @default(now())
+}
+
+model TrackingPoint {
+  id         String   @id @default(cuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lat        Float
+  lng        Float
+  altitudeM  Float?
+  speedKmh   Float?
+  recordedAt DateTime @default(now())
+
+  @@index([orderId, recordedAt])
+}
+
+// --- Платежи и выплаты -----------------------------------------------------
+
+model Payment {
+  id                String        @id @default(cuid())
+  orderId           String
+  order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  provider          String        @default("yookassa")
+  providerPaymentId String?       @unique
+  amount            Decimal       @db.Decimal(12, 2)
+  status            PaymentStatus @default(pending)
+  confirmationUrl   String?
+  createdAt         DateTime      @default(now())
+  paidAt            DateTime?
+}
+
+enum PayoutStatus {
+  pending
+  paid
+  failed
+}
+
+model Payout {
+  id         String       @id @default(cuid())
+  executorId String
+  executor   ExecutorProfile @relation(fields: [executorId], references: [id])
+  orderId    String       @unique
+  order      Order        @relation(fields: [orderId], references: [id])
+  amount     Decimal      @db.Decimal(12, 2)
+  status     PayoutStatus @default(pending)
+  createdAt  DateTime     @default(now())
+  paidAt     DateTime?
+}
+
+// --- Рейтинги, жалобы, уведомления, тарифы ---------------------------------
+
+model Rating {
+  id         String   @id @default(cuid())
+  orderId    String   @unique
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   User     @relation("RatingsGiven", fields: [customerId], references: [id])
+  score      Int
+  comment    String?
+  createdAt  DateTime @default(now())
+}
+
+enum ComplaintStatus {
+  open
+  in_review
+  resolved
+  rejected
+}
+
+model Complaint {
+  id          String          @id @default(cuid())
+  orderId     String
+  order       Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  subject     String
+  description String
+  status      ComplaintStatus @default(open)
+  createdAt   DateTime        @default(now())
+  resolvedAt  DateTime?
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  payload   Json?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Tariff {
+  id                String   @id @default(cuid())
+  name              String
+  basePricePerKm    Decimal  @db.Decimal(10, 2)
+  pricePerKg        Decimal  @db.Decimal(10, 2)
+  minPrice          Decimal  @db.Decimal(10, 2)
+  commissionPercent Decimal  @db.Decimal(5, 2)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+}
